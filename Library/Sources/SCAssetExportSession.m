@@ -13,6 +13,8 @@
 #import "SCSampleBufferHolder.h"
 #import "SCIOPixelBuffers.h"
 #import "SCFilter+VideoComposition.h"
+#import <mach/mach.h>
+#import <mach/mach_host.h>
 
 #define EnsureSuccess(error, x) if (error != nil) { _error = error; if (x != nil) x(); return; }
 #define kAudioFormatType kAudioFormatLinearPCM
@@ -60,7 +62,7 @@
         _translatesFilterIntoComposition = YES;
         _shouldOptimizeForNetworkUse = NO;
     }
-
+    
     return self;
 }
 
@@ -119,32 +121,32 @@
 
 - (SCIOPixelBuffers *)renderIOPixelBuffersWithCI:(SCIOPixelBuffers *)pixelBuffers {
     SCIOPixelBuffers *outputPixelBuffers = pixelBuffers;
-
+    
     if (_context != nil) {
         @autoreleasepool {
             CIImage *result = [CIImage imageWithCVPixelBuffer:pixelBuffers.inputPixelBuffer];
-
+            
             NSTimeInterval timeSeconds = CMTimeGetSeconds(pixelBuffers.time);
-
+            
             if (_filter != nil) {
                 result = [_filter imageByProcessingImage:result atTime:timeSeconds];
             }
-
+            
             if (!CGSizeEqualToSize(result.extent.size, _outputBufferSize)) {
                 result = [result imageByCroppingToRect:CGRectMake(result.extent.origin.x, result.extent.origin.y, _outputBufferSize.width, _outputBufferSize.height)];
             }
-
+            
             CGColorSpaceRef colorSpace = CGColorSpaceCreateDeviceRGB();
-
+            
             [_context.CIContext render:result toCVPixelBuffer:pixelBuffers.outputPixelBuffer bounds:result.extent colorSpace:colorSpace];
-
+            
             CGColorSpaceRelease(colorSpace);
-
+            
             if (pixelBuffers.inputPixelBuffer != pixelBuffers.outputPixelBuffer) {
                 CVPixelBufferUnlockBaseAddress(pixelBuffers.inputPixelBuffer, 0);
             }
         }
-
+        
         outputPixelBuffers = [SCIOPixelBuffers IOPixelBuffersWithInputPixelBuffer:pixelBuffers.outputPixelBuffer outputPixelBuffer:pixelBuffers.outputPixelBuffer time:pixelBuffers.time];
     }
     
@@ -153,16 +155,16 @@
 
 static CGContextRef SCCreateContextFromPixelBuffer(CVPixelBufferRef pixelBuffer) {
     CGColorSpaceRef colorSpace = CGColorSpaceCreateDeviceRGB();
-
+    
     CGBitmapInfo bitmapInfo = kCGBitmapByteOrder32Little | kCGImageAlphaNoneSkipFirst;
-
+    
     CGContextRef ctx = CGBitmapContextCreate(CVPixelBufferGetBaseAddress(pixelBuffer), CVPixelBufferGetWidth(pixelBuffer), CVPixelBufferGetHeight(pixelBuffer), 8, CVPixelBufferGetBytesPerRow(pixelBuffer), colorSpace, bitmapInfo);
-
+    
     CGColorSpaceRelease(colorSpace);
-
+    
     CGContextTranslateCTM(ctx, 1, CGBitmapContextGetHeight(ctx));
     CGContextScaleCTM(ctx, 1, -1);
-
+    
     return ctx;
 }
 
@@ -170,31 +172,14 @@ static CGContextRef SCCreateContextFromPixelBuffer(CVPixelBufferRef pixelBuffer)
     UIView<SCVideoOverlay> *overlay = self.videoConfiguration.overlay;
     
     if (overlay != nil) {
-        CGSize videoSize = CGSizeMake(CVPixelBufferGetWidth(outputPixelBuffer), CVPixelBufferGetHeight(outputPixelBuffer));
-
-        BOOL onMainThread = NO;
-        if ([overlay respondsToSelector:@selector(requiresUpdateOnMainThreadAtVideoTime:videoSize:)]) {
-            onMainThread = [overlay requiresUpdateOnMainThreadAtVideoTime:timeSeconds videoSize:videoSize];
+        if ([overlay respondsToSelector:@selector(updateWithVideoTime:)]) {
+            [overlay updateWithVideoTime:timeSeconds];
         }
-
+        
         CGContextRef ctx = SCCreateContextFromPixelBuffer(outputPixelBuffer);
-
-        void (^layoutBlock)() = ^{
-            overlay.frame = CGRectMake(0, 0, videoSize.width, videoSize.height);
-
-            if ([overlay respondsToSelector:@selector(updateWithVideoTime:)]) {
-                [overlay updateWithVideoTime:timeSeconds];
-            }
-
-            [overlay layoutIfNeeded];
-        };
-
-        if (onMainThread) {
-            dispatch_sync(dispatch_get_main_queue(), layoutBlock);
-        } else {
-            layoutBlock();
-        }
-
+        overlay.frame = CGRectMake(0, 0, CVPixelBufferGetWidth(outputPixelBuffer), CVPixelBufferGetHeight(outputPixelBuffer));
+        [overlay layoutIfNeeded];
+        
         [overlay.layer renderInContext:ctx];
         
         CGContextRelease(ctx);
@@ -207,7 +192,7 @@ static CGContextRef SCCreateContextFromPixelBuffer(CVPixelBufferRef pixelBuffer)
     } else if (error != nil) {
         _error = error;
     }
-
+    
     if (_writer.status != AVAssetWriterStatusCancelled) {
         [input markAsFinished];
     }
@@ -220,16 +205,47 @@ static CGContextRef SCCreateContextFromPixelBuffer(CVPixelBufferRef pixelBuffer)
     }
 }
 
+- (Boolean) checkMemoryDuringProcess {
+    
+    
+    mach_port_t host_port;
+    mach_msg_type_number_t host_size;
+    vm_size_t pagesize;
+    
+    host_port = mach_host_self();
+    host_size = sizeof(vm_statistics_data_t) / sizeof(integer_t);
+    host_page_size(host_port, &pagesize);
+    
+    vm_statistics_data_t vm_stat;
+    
+    
+    if (host_statistics(host_port, HOST_VM_INFO, (host_info_t)&vm_stat, &host_size) == KERN_SUCCESS) {
+        
+        unsigned long long mem_free = vm_stat.free_count * pagesize;
+        
+        unsigned long long MIN_AVAILABLE = 5242880;
+        
+        if ( mem_free  <  MIN_AVAILABLE) {
+            
+            NSLog(@"|||||||||||||||| LOW MEMORY ON EXPORT (BELOW 5MB)---> free: %llu",  mem_free);
+            _error = [NSError errorWithDomain:@"Not enough memory for export during export!!!!!" code:-1 userInfo:nil];
+            return NO;
+        }
+        
+    }
+    return YES;
+}
+
 - (void)beginReadWriteOnVideo {
     if (_videoInput != nil) {
         SCProcessingQueue *videoProcessingQueue = nil;
         SCProcessingQueue *filterRenderingQueue = nil;
         SCProcessingQueue *videoReadingQueue = [SCProcessingQueue new];
-
+        
         __weak typeof(self) wSelf = self;
         
-        videoReadingQueue.maxQueueSize = 2;
-
+        videoReadingQueue.maxQueueSize = 1;
+        
         [videoReadingQueue startProcessingWithBlock:^id{
             CMSampleBufferRef sampleBuffer = [wSelf.videoOutput copyNextSampleBuffer];
             SCSampleBufferHolder *holder = nil;
@@ -244,14 +260,14 @@ static CGContextRef SCCreateContextFromPixelBuffer(CVPixelBufferRef pixelBuffer)
         
         if (_videoPixelAdaptor != nil) {
             filterRenderingQueue = [SCProcessingQueue new];
-            filterRenderingQueue.maxQueueSize = 2;
+            filterRenderingQueue.maxQueueSize = 1;
             [filterRenderingQueue startProcessingWithBlock:^id{
                 SCIOPixelBuffers *pixelBuffers = nil;
                 SCSampleBufferHolder *bufferHolder = [videoReadingQueue dequeue];
                 
                 if (bufferHolder != nil) {
                     __strong typeof(self) strongSelf = wSelf;
-
+                    
                     if (strongSelf != nil) {
                         pixelBuffers = [strongSelf createIOPixelBuffers:bufferHolder.sampleBuffer];
                         CVPixelBufferLockBaseAddress(pixelBuffers.inputPixelBuffer, 0);
@@ -261,12 +277,12 @@ static CGContextRef SCCreateContextFromPixelBuffer(CVPixelBufferRef pixelBuffer)
                         pixelBuffers = [strongSelf renderIOPixelBuffersWithCI:pixelBuffers];
                     }
                 }
-
+                
                 return pixelBuffers;
             }];
             
             videoProcessingQueue = [SCProcessingQueue new];
-            videoProcessingQueue.maxQueueSize = 2;
+            videoProcessingQueue.maxQueueSize = 1;
             [videoProcessingQueue startProcessingWithBlock:^id{
                 SCIOPixelBuffers *videoBuffers = [filterRenderingQueue dequeue];
                 
@@ -280,14 +296,16 @@ static CGContextRef SCCreateContextFromPixelBuffer(CVPixelBufferRef pixelBuffer)
         
         dispatch_group_enter(_dispatchGroup);
         _needsLeaveVideo = YES;
-
+        
         [_videoInput requestMediaDataWhenReadyOnQueue:_videoQueue usingBlock:^{
             BOOL shouldReadNextBuffer = YES;
             __strong typeof(self) strongSelf = wSelf;
+            int countFrames = 0;
             while (strongSelf.videoInput.isReadyForMoreMediaData && shouldReadNextBuffer && !strongSelf.cancelled) {
+                
                 SCIOPixelBuffers *videoBuffer = nil;
                 SCSampleBufferHolder *bufferHolder = nil;
-
+                
                 CMTime time;
                 if (videoProcessingQueue != nil) {
                     videoBuffer = [videoProcessingQueue dequeue];
@@ -298,22 +316,29 @@ static CGContextRef SCCreateContextFromPixelBuffer(CVPixelBufferRef pixelBuffer)
                         time = CMSampleBufferGetPresentationTimeStamp(bufferHolder.sampleBuffer);
                     }
                 }
-
+                
                 if (videoBuffer != nil || bufferHolder != nil) {
                     if (CMTIME_COMPARE_INLINE(time, >=, strongSelf.nextAllowedVideoFrame)) {
-                        if (bufferHolder != nil) {
-                            shouldReadNextBuffer = [strongSelf.videoInput appendSampleBuffer:bufferHolder.sampleBuffer];
-                        } else {
-                            shouldReadNextBuffer = [strongSelf encodePixelBuffer:videoBuffer.outputPixelBuffer presentationTime:videoBuffer.time];
+                        countFrames++;
+                        if ( (countFrames % 90) == 0) {
+                            shouldReadNextBuffer = [self checkMemoryDuringProcess ];
+                            
                         }
-
-                        if (strongSelf.videoConfiguration.maxFrameRate > 0) {
-                            strongSelf.nextAllowedVideoFrame = CMTimeAdd(time, CMTimeMake(1, strongSelf.videoConfiguration.maxFrameRate));
+                        if ( shouldReadNextBuffer ) {
+                            if (bufferHolder != nil) {
+                                shouldReadNextBuffer = [strongSelf.videoInput appendSampleBuffer:bufferHolder.sampleBuffer];
+                            } else {
+                                shouldReadNextBuffer = [strongSelf encodePixelBuffer:videoBuffer.outputPixelBuffer presentationTime:videoBuffer.time];
+                            }
+                            
+                            if (strongSelf.videoConfiguration.maxFrameRate > 0) {
+                                strongSelf.nextAllowedVideoFrame = CMTimeAdd(time, CMTimeMake(1, strongSelf.videoConfiguration.maxFrameRate));
+                            }
+                            
+                            [strongSelf _didAppendToInput:strongSelf.videoInput atTime:time];
                         }
-
-                        [strongSelf _didAppendToInput:strongSelf.videoInput atTime:time];
                     }
-
+                    
                     if (videoBuffer != nil) {
                         CVPixelBufferUnlockBaseAddress(videoBuffer.outputPixelBuffer, 0);
                     }
@@ -327,7 +352,7 @@ static CGContextRef SCCreateContextFromPixelBuffer(CVPixelBufferRef pixelBuffer)
                 [videoProcessingQueue stopProcessing];
                 [videoReadingQueue stopProcessing];
                 [strongSelf markInputComplete:strongSelf.videoInput error:nil];
-
+                
                 if (strongSelf.needsLeaveVideo) {
                     strongSelf.needsLeaveVideo = NO;
                     dispatch_group_leave(strongSelf.dispatchGroup);
@@ -389,7 +414,7 @@ static CGContextRef SCCreateContextFromPixelBuffer(CVPixelBufferRef pixelBuffer)
     if (!_cancelled) {
         [self _setProgress:1];
     }
-
+    
     if (completionHandler != nil) {
         dispatch_async(dispatch_get_main_queue(), ^{
             completionHandler();
@@ -417,24 +442,24 @@ static CGContextRef SCCreateContextFromPixelBuffer(CVPixelBufferRef pixelBuffer)
                 CVPixelBufferRelease(_contextPixelBuffer);
             }
             _contextPixelBuffer = pixelBuffer;
-
+            
             cgContext = SCCreateContextFromPixelBuffer(pixelBuffer);
-
+            
             options = @{
                         SCContextOptionsCGContextKey: (__bridge id)cgContext
                         };
         }
-
+        
         _context = [SCContext contextWithType:_contextType options:options];
-
+        
         if (cgContext != nil) {
             CGContextRelease(cgContext);
         }
-
+        
         return YES;
     } else {
         _context = nil;
-
+        
         return NO;
     }
 }
@@ -446,11 +471,11 @@ static CGContextRef SCCreateContextFromPixelBuffer(CVPixelBufferRef pixelBuffer)
 - (void)_setupPixelBufferAdaptorIfNeeded:(BOOL)needed {
     id<SCAssetExportSessionDelegate> delegate = self.delegate;
     BOOL needsPixelBuffer = needed;
-
+    
     if ([delegate respondsToSelector:@selector(assetExportSessionNeedsInputPixelBufferAdaptor:)] && [delegate assetExportSessionNeedsInputPixelBufferAdaptor:self]) {
         needsPixelBuffer = YES;
     }
-
+    
     if (needsPixelBuffer && _videoInput != nil) {
         NSDictionary *pixelBufferAttributes = @{
                                                 (id)kCVPixelBufferPixelFormatTypeKey : [NSNumber numberWithInt:kCVPixelFormatType_32BGRA],
@@ -465,20 +490,20 @@ static CGContextRef SCCreateContextFromPixelBuffer(CVPixelBufferRef pixelBuffer)
 - (void)cancelExport
 {
     _cancelled = YES;
-
+    
     dispatch_sync(_videoQueue, ^{
         if (_needsLeaveVideo) {
             _needsLeaveVideo = NO;
             dispatch_group_leave(_dispatchGroup);
         }
-
+        
         dispatch_sync(_audioQueue, ^{
             if (_needsLeaveAudio) {
                 _needsLeaveAudio = NO;
                 dispatch_group_leave(_dispatchGroup);
             }
         });
-
+        
         [_reader cancelReading];
         [_writer cancelWriting];
     });
@@ -488,7 +513,7 @@ static CGContextRef SCCreateContextFromPixelBuffer(CVPixelBufferRef pixelBuffer)
     SCFilter *watermarkFilter = [self _buildWatermarkFilterForVideoSize:videoSize];
     SCFilter *renderingFilter = nil;
     SCFilter *customFilter = self.videoConfiguration.filter;
-
+    
     if (customFilter != nil) {
         if (watermarkFilter != nil) {
             renderingFilter = [SCFilter emptyFilter];
@@ -500,50 +525,50 @@ static CGContextRef SCCreateContextFromPixelBuffer(CVPixelBufferRef pixelBuffer)
     } else {
         renderingFilter = watermarkFilter;
     }
-
+    
     if (renderingFilter.isEmpty) {
         renderingFilter = nil;
     }
-
+    
     return renderingFilter;
 }
 
 
 - (SCFilter *)_buildWatermarkFilterForVideoSize:(CGSize)videoSize {
     UIImage *watermarkImage = self.videoConfiguration.watermarkImage;
-
+    
     if (watermarkImage != nil) {
         CGRect watermarkFrame = self.videoConfiguration.watermarkFrame;
-
+        
         switch (self.videoConfiguration.watermarkAnchorLocation) {
             case SCWatermarkAnchorLocationTopLeft:
-
+                
                 break;
             case SCWatermarkAnchorLocationTopRight:
                 watermarkFrame.origin.x = videoSize.width - watermarkFrame.size.width - watermarkFrame.origin.x;
                 break;
             case SCWatermarkAnchorLocationBottomLeft:
                 watermarkFrame.origin.y = videoSize.height - watermarkFrame.size.height - watermarkFrame.origin.y;
-
+                
                 break;
             case SCWatermarkAnchorLocationBottomRight:
                 watermarkFrame.origin.y = videoSize.height - watermarkFrame.size.height - watermarkFrame.origin.y;
                 watermarkFrame.origin.x = videoSize.width - watermarkFrame.size.width - watermarkFrame.origin.x;
                 break;
         }
-
+        
         UIGraphicsBeginImageContextWithOptions(videoSize, NO, 1);
-
+        
         [watermarkImage drawInRect:watermarkFrame];
-
+        
         UIImage *generatedWatermarkImage = UIGraphicsGetImageFromCurrentImageContext();
-
+        
         UIGraphicsEndImageContext();
-
+        
         CIImage *watermarkCIImage = [CIImage imageWithCGImage:generatedWatermarkImage.CGImage];
         return [SCFilter filterWithCIImage:watermarkCIImage];
     }
-
+    
     return nil;
 }
 
@@ -552,10 +577,10 @@ static CGContextRef SCCreateContextFromPixelBuffer(CVPixelBufferRef pixelBuffer)
         // Input
         NSDictionary *audioSettings = [_audioConfiguration createAssetWriterOptionsUsingSampleBuffer:nil];
         _audioInput = [self addWriter:AVMediaTypeAudio withSettings:audioSettings];
-
+        
         // Output
         AVAudioMix *audioMix = self.audioConfiguration.audioMix;
-
+        
         AVAssetReaderOutput *reader = nil;
         NSDictionary *settings = @{ AVFormatIDKey : [NSNumber numberWithUnsignedInt:kAudioFormatType] };
         if (audioMix == nil) {
@@ -566,7 +591,7 @@ static CGContextRef SCCreateContextFromPixelBuffer(CVPixelBufferRef pixelBuffer)
             reader = audioMixOutput;
         }
         reader.alwaysCopiesSampleData = NO;
-
+        
         if ([_reader canAddOutput:reader]) {
             [_reader addOutput:reader];
             _audioOutput = reader;
@@ -582,17 +607,17 @@ static CGContextRef SCCreateContextFromPixelBuffer(CVPixelBufferRef pixelBuffer)
     _inputBufferSize = CGSizeZero;
     if (videoTracks.count > 0 && self.videoConfiguration.enabled && !self.videoConfiguration.shouldIgnore) {
         AVAssetTrack *videoTrack = [videoTracks objectAtIndex:0];
-
+        
         // Input
         NSDictionary *videoSettings = [_videoConfiguration createAssetWriterOptionsWithVideoSize:videoTrack.naturalSize];
-
+        
         _videoInput = [self addWriter:AVMediaTypeVideo withSettings:videoSettings];
         if (_videoConfiguration.keepInputAffineTransform) {
             _videoInput.transform = videoTrack.preferredTransform;
         } else {
             _videoInput.transform = _videoConfiguration.affineTransform;
         }
-
+        
         // Output
         AVVideoComposition *videoComposition = self.videoConfiguration.composition;
         if (videoComposition == nil) {
@@ -600,24 +625,24 @@ static CGContextRef SCCreateContextFromPixelBuffer(CVPixelBufferRef pixelBuffer)
         } else {
             _inputBufferSize = videoComposition.renderSize;
         }
-
+        
         CGSize outputBufferSize = _inputBufferSize;
         if (!CGSizeEqualToSize(self.videoConfiguration.bufferSize, CGSizeZero)) {
             outputBufferSize = self.videoConfiguration.bufferSize;
         }
-
+        
         _outputBufferSize = outputBufferSize;
         _outputBufferDiffersFromInput = !CGSizeEqualToSize(_inputBufferSize, outputBufferSize);
-
+        
         _filter = [self _generateRenderingFilterForVideoSize:outputBufferSize];
-
+        
         if (videoComposition == nil && _filter != nil && self.translatesFilterIntoComposition) {
             videoComposition = [_filter videoCompositionWithAsset:_inputAsset];
             if (videoComposition != nil) {
                 _filter = nil;
             }
         }
-
+        
         NSDictionary *settings = nil;
         if (_filter != nil || self.videoConfiguration.overlay != nil) {
             settings = @{
@@ -630,7 +655,7 @@ static CGContextRef SCCreateContextFromPixelBuffer(CVPixelBufferRef pixelBuffer)
                          (id)kCVPixelBufferIOSurfacePropertiesKey : [NSDictionary dictionary]
                          };
         }
-
+        
         AVAssetReaderOutput *reader = nil;
         if (videoComposition == nil) {
             reader = [AVAssetReaderTrackOutput assetReaderTrackOutputWithTrack:videoTrack outputSettings:settings];
@@ -640,14 +665,14 @@ static CGContextRef SCCreateContextFromPixelBuffer(CVPixelBufferRef pixelBuffer)
             reader = videoCompositionOutput;
         }
         reader.alwaysCopiesSampleData = NO;
-
+        
         if ([_reader canAddOutput:reader]) {
             [_reader addOutput:reader];
             _videoOutput = reader;
         } else {
             NSLog(@"Unable to add video reader output");
         }
-
+        
         [self _setupPixelBufferAdaptorIfNeeded:_filter != nil || self.videoConfiguration.overlay != nil];
         [self _setupContextIfNeeded];
     } else {
@@ -655,31 +680,74 @@ static CGContextRef SCCreateContextFromPixelBuffer(CVPixelBufferRef pixelBuffer)
     }
 }
 
+- (void)checkMemory:(NSError **) error {
+    
+    
+    mach_port_t host_port;
+    mach_msg_type_number_t host_size;
+    vm_size_t pagesize;
+    
+    host_port = mach_host_self();
+    host_size = sizeof(vm_statistics_data_t) / sizeof(integer_t);
+    host_page_size(host_port, &pagesize);
+    
+    vm_statistics_data_t vm_stat;
+    
+    if (host_statistics(host_port, HOST_VM_INFO, (host_info_t)&vm_stat, &host_size) == KERN_SUCCESS) {
+        
+        unsigned long long mem_free = vm_stat.free_count * pagesize;
+        
+        
+        CGFloat maxTotalMemory = self.videoConfiguration.bufferSize.height * self.videoConfiguration.bufferSize.width * self.videoConfiguration.maxFrameRate * CMTimeGetSeconds(self.inputAsset.duration);
+        
+        CGFloat needed = ((self.videoConfiguration.filter==nil && self.videoConfiguration.filter.subFilters == nil) ||
+                          self.videoConfiguration.filter.subFilters.count == 0 || self.videoConfiguration.filter.subFilters.count == 1) ? 0.08 : 0.12;
+        
+        CGFloat memoryNeeded = maxTotalMemory * needed;
+        
+        
+        
+        if (memoryNeeded > mem_free) {
+            
+            NSLog(@"|||||||||||||||| MEMORY --->  needed: %f  free: %llu", memoryNeeded, mem_free);
+            *error = [NSError errorWithDomain:@"Not enough memory for export!!!!!" code:-1 userInfo:nil];
+            
+        }
+        
+    }
+}
+
 - (void)exportAsynchronouslyWithCompletionHandler:(void (^)())completionHandler {
     _cancelled = NO;
     _nextAllowedVideoFrame = kCMTimeZero;
     NSError *error = nil;
+    sleep(1);
+    
+    [self checkMemory: &error];
+    EnsureSuccess(error, completionHandler);
+    
     
     [[NSFileManager defaultManager] removeItemAtURL:self.outputUrl error:nil];
     
     _writer = [AVAssetWriter assetWriterWithURL:self.outputUrl fileType:self.outputFileType error:&error];
     _writer.shouldOptimizeForNetworkUse = _shouldOptimizeForNetworkUse;
     _writer.metadata = [SCRecorderTools assetWriterMetadata];
-
+    
     EnsureSuccess(error, completionHandler);
     
     _reader = [AVAssetReader assetReaderWithAsset:self.inputAsset error:&error];
     _reader.timeRange = _timeRange;
     EnsureSuccess(error, completionHandler);
-
+    
+    
     [self _setupAudioUsingTracks:[self.inputAsset tracksWithMediaType:AVMediaTypeAudio]];
     [self _setupVideoUsingTracks:[self.inputAsset tracksWithMediaType:AVMediaTypeVideo]];
-
+    
     if (_error != nil) {
         [self callCompletionHandler:completionHandler];
         return;
     }
-
+    
     if (![_reader startReading]) {
         EnsureSuccess(_reader.error, completionHandler);
     }
@@ -691,11 +759,13 @@ static CGContextRef SCCreateContextFromPixelBuffer(CVPixelBufferRef pixelBuffer)
     [_writer startSessionAtSourceTime:kCMTimeZero];
     
     _totalDuration = CMTimeGetSeconds(_inputAsset.duration);
-
+    
+    
     [self beginReadWriteOnAudio];
     [self beginReadWriteOnVideo];
     
     dispatch_group_notify(_dispatchGroup, dispatch_get_main_queue(), ^{
+        
         if (_error == nil) {
             _error = _writer.error;
         }
