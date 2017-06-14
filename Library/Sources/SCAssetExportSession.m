@@ -244,7 +244,7 @@ static CGContextRef SCCreateContextFromPixelBuffer(CVPixelBufferRef pixelBuffer)
         
         __weak typeof(self) wSelf = self;
         
-        videoReadingQueue.maxQueueSize = 1;
+        videoReadingQueue.maxQueueSize = 2;
         
         [videoReadingQueue startProcessingWithBlock:^id{
             CMSampleBufferRef sampleBuffer = [wSelf.videoOutput copyNextSampleBuffer];
@@ -260,7 +260,7 @@ static CGContextRef SCCreateContextFromPixelBuffer(CVPixelBufferRef pixelBuffer)
         
         if (_videoPixelAdaptor != nil) {
             filterRenderingQueue = [SCProcessingQueue new];
-            filterRenderingQueue.maxQueueSize = 1;
+            filterRenderingQueue.maxQueueSize = 2;
             [filterRenderingQueue startProcessingWithBlock:^id{
                 SCIOPixelBuffers *pixelBuffers = nil;
                 SCSampleBufferHolder *bufferHolder = [videoReadingQueue dequeue];
@@ -282,7 +282,7 @@ static CGContextRef SCCreateContextFromPixelBuffer(CVPixelBufferRef pixelBuffer)
             }];
             
             videoProcessingQueue = [SCProcessingQueue new];
-            videoProcessingQueue.maxQueueSize = 1;
+            videoProcessingQueue.maxQueueSize = 2;
             [videoProcessingQueue startProcessingWithBlock:^id{
                 SCIOPixelBuffers *videoBuffers = [filterRenderingQueue dequeue];
                 
@@ -708,7 +708,7 @@ static CGContextRef SCCreateContextFromPixelBuffer(CVPixelBufferRef pixelBuffer)
         CGFloat maxTotalMemory = self.videoConfiguration.bufferSize.height * self.videoConfiguration.bufferSize.width * self.videoConfiguration.maxFrameRate * CMTimeGetSeconds(self.inputAsset.duration);
         
         CGFloat needed = ((self.videoConfiguration.filter==nil && self.videoConfiguration.filter.subFilters == nil) ||
-                          self.videoConfiguration.filter.subFilters.count == 0 || self.videoConfiguration.filter.subFilters.count == 1) ? 0.08 : 0.13;
+                          self.videoConfiguration.filter.subFilters.count == 0 || self.videoConfiguration.filter.subFilters.count == 1) ? 0.08 : 0.14;
         
         CGFloat memoryNeeded = maxTotalMemory * needed;
         
