@@ -223,11 +223,11 @@ static CGContextRef SCCreateContextFromPixelBuffer(CVPixelBufferRef pixelBuffer)
         
         unsigned long long mem_free = vm_stat.free_count * pagesize;
         
-        unsigned long long MIN_AVAILABLE = 5242880;
+        unsigned long long MIN_AVAILABLE = 6291456;
         
         if ( mem_free  <  MIN_AVAILABLE) {
             
-            NSLog(@"|||||||||||||||| LOW MEMORY ON EXPORT (BELOW 5MB)---> free: %llu",  mem_free);
+            NSLog(@"|||||||||||||||| LOW MEMORY ON EXPORT (BELOW 6MB)---> free: %llu",  mem_free);
             _error = [NSError errorWithDomain:@"Not enough memory for export during export!!!!!" code:-1 userInfo:nil];
             return NO;
         }
@@ -320,7 +320,7 @@ static CGContextRef SCCreateContextFromPixelBuffer(CVPixelBufferRef pixelBuffer)
                 if (videoBuffer != nil || bufferHolder != nil) {
                     if (CMTIME_COMPARE_INLINE(time, >=, strongSelf.nextAllowedVideoFrame)) {
                         countFrames++;
-                        if ( (countFrames % 90) == 0) {
+                        if ( (countFrames % 60) == 0) {
                             shouldReadNextBuffer = [self checkMemoryDuringProcess ];
                             
                         }
@@ -696,20 +696,27 @@ static CGContextRef SCCreateContextFromPixelBuffer(CVPixelBufferRef pixelBuffer)
     if (host_statistics(host_port, HOST_VM_INFO, (host_info_t)&vm_stat, &host_size) == KERN_SUCCESS) {
         
         unsigned long long mem_free = vm_stat.free_count * pagesize;
+        //unsigned long long mem_inactive = vm_stat.inactive_count * pagesize;
+        unsigned long long mem_available = mem_free; // + mem_inactive;
         
+        //NSLog(@"Pages free: %llu", (uint64_t) ((vm_stat.free_count - vm_stat.speculative_count)* pagesize));
+        //NSLog(@"Pages active: %llu", (uint64_t) (vm_stat.active_count* pagesize));
+        //NSLog(@"Pages inactive: %llu", (uint64_t) (vm_stat.inactive_count* pagesize));
+        //NSLog(@"Pages speculative: %llu", (uint64_t) (vm_stat.speculative_count* pagesize));
+        //NSLog(@"Pages wired down: %llu", (uint64_t) (vm_stat.wire_count* pagesize));
         
         CGFloat maxTotalMemory = self.videoConfiguration.bufferSize.height * self.videoConfiguration.bufferSize.width * self.videoConfiguration.maxFrameRate * CMTimeGetSeconds(self.inputAsset.duration);
         
         CGFloat needed = ((self.videoConfiguration.filter==nil && self.videoConfiguration.filter.subFilters == nil) ||
-                          self.videoConfiguration.filter.subFilters.count == 0 || self.videoConfiguration.filter.subFilters.count == 1) ? 0.08 : 0.12;
+                          self.videoConfiguration.filter.subFilters.count == 0 || self.videoConfiguration.filter.subFilters.count == 1) ? 0.08 : 0.13;
         
         CGFloat memoryNeeded = maxTotalMemory * needed;
         
         
         
-        if (memoryNeeded > mem_free) {
+        if (memoryNeeded > mem_available) {
             
-            NSLog(@"|||||||||||||||| MEMORY --->  needed: %f  free: %llu", memoryNeeded, mem_free);
+            NSLog(@"|||||||||||||||| MEMORY --->  needed: %f  free: %llu", memoryNeeded, mem_available);
             *error = [NSError errorWithDomain:@"Not enough memory for export!!!!!" code:-1 userInfo:nil];
             
         }
