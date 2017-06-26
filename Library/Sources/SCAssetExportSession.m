@@ -324,18 +324,30 @@ static CGContextRef SCCreateContextFromPixelBuffer(CVPixelBufferRef pixelBuffer)
                             shouldReadNextBuffer = [self checkMemoryDuringProcess ];
                             
                         }
+                        
                         if ( shouldReadNextBuffer ) {
+                            
                             if (bufferHolder != nil) {
-                                shouldReadNextBuffer = [strongSelf.videoInput appendSampleBuffer:bufferHolder.sampleBuffer];
+                                @try {
+                                    shouldReadNextBuffer = [strongSelf.videoInput appendSampleBuffer:bufferHolder.sampleBuffer];
+                                    if (strongSelf.videoConfiguration.maxFrameRate > 0) {
+                                        strongSelf.nextAllowedVideoFrame = CMTimeAdd(time, CMTimeMake(1, strongSelf.videoConfiguration.maxFrameRate));
+                                    }
+                                    [strongSelf _didAppendToInput:strongSelf.videoInput atTime:time];
+                                    
+                                } @catch (NSException *exception) {
+                                    shouldReadNextBuffer = NO;
+                                    _error = [NSError errorWithDomain:@"AWriter not opened!!!!!" code:-1 userInfo:nil];
+                                    
+                                } @finally {
+                                    bufferHolder.sampleBuffer = nil;
+                                    bufferHolder = nil;
+                                }
+                                
                             } else {
                                 shouldReadNextBuffer = [strongSelf encodePixelBuffer:videoBuffer.outputPixelBuffer presentationTime:videoBuffer.time];
                             }
                             
-                            if (strongSelf.videoConfiguration.maxFrameRate > 0) {
-                                strongSelf.nextAllowedVideoFrame = CMTimeAdd(time, CMTimeMake(1, strongSelf.videoConfiguration.maxFrameRate));
-                            }
-                            
-                            [strongSelf _didAppendToInput:strongSelf.videoInput atTime:time];
                         }
                     }
                     
@@ -373,14 +385,23 @@ static CGContextRef SCCreateContextFromPixelBuffer(CVPixelBufferRef pixelBuffer)
             while (strongSelf.audioInput.isReadyForMoreMediaData && shouldReadNextBuffer && !strongSelf.cancelled) {
                 CMSampleBufferRef audioBuffer = [strongSelf.audioOutput copyNextSampleBuffer];
                 
-                if (audioBuffer != nil) {
-                    shouldReadNextBuffer = [strongSelf.audioInput appendSampleBuffer:audioBuffer];
+                if (audioBuffer != nil && shouldReadNextBuffer) {
+                    @try {
+                        shouldReadNextBuffer = [strongSelf.audioInput appendSampleBuffer:audioBuffer];
+                        CMTime time = CMSampleBufferGetPresentationTimeStamp(audioBuffer);
+                        [strongSelf _didAppendToInput:strongSelf.audioInput atTime:time];
+                        
+                    } @catch (NSException *exception) {
+                        shouldReadNextBuffer = NO;
+                        _error = [NSError errorWithDomain:@"AWriter not opened!!!!!" code:-1 userInfo:nil];
+                        
+                    } @finally {
+                        CFRelease(audioBuffer);
+                        audioBuffer = nil;
+                    }
                     
-                    CMTime time = CMSampleBufferGetPresentationTimeStamp(audioBuffer);
                     
-                    CFRelease(audioBuffer);
                     
-                    [strongSelf _didAppendToInput:strongSelf.audioInput atTime:time];
                 } else {
                     shouldReadNextBuffer = NO;
                 }
