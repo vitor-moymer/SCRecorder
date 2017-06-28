@@ -275,10 +275,11 @@ static CGContextRef SCCreateContextFromPixelBuffer(CVPixelBufferRef pixelBuffer)
                             CVPixelBufferLockBaseAddress(pixelBuffers.outputPixelBuffer, 0);
                         }
                         pixelBuffers = [strongSelf renderIOPixelBuffersWithCI:pixelBuffers];
-                        
-                        bufferHolder.sampleBuffer = nil;
-                        bufferHolder = nil;
                     }
+                    
+                    bufferHolder.sampleBuffer = nil;
+                    bufferHolder = nil;
+                    
                 }
                 
                 return pixelBuffers;
@@ -326,26 +327,26 @@ static CGContextRef SCCreateContextFromPixelBuffer(CVPixelBufferRef pixelBuffer)
                         if ( (countFrames % 60) == 0) {
                             shouldReadNextBuffer = [self checkMemoryDuringProcess ];
                         }
-                        // @try {
-                        if ( shouldReadNextBuffer ) {
-                            if (bufferHolder != nil) {
-                                shouldReadNextBuffer = [strongSelf.videoInput appendSampleBuffer:bufferHolder.sampleBuffer];
-                            } else {
-                                shouldReadNextBuffer = [strongSelf encodePixelBuffer:videoBuffer.outputPixelBuffer presentationTime:videoBuffer.time];
+                        @try {
+                            if ( shouldReadNextBuffer ) {
+                                if (bufferHolder != nil) {
+                                    shouldReadNextBuffer = [strongSelf.videoInput appendSampleBuffer:bufferHolder.sampleBuffer];
+                                } else {
+                                    shouldReadNextBuffer = [strongSelf encodePixelBuffer:videoBuffer.outputPixelBuffer presentationTime:videoBuffer.time];
+                                }
+                                if (strongSelf.videoConfiguration.maxFrameRate > 0) {
+                                    strongSelf.nextAllowedVideoFrame = CMTimeAdd(time, CMTimeMake(1, strongSelf.videoConfiguration.maxFrameRate));
+                                }
+                                [strongSelf _didAppendToInput:strongSelf.videoInput atTime:time];
+                                
                             }
-                            if (strongSelf.videoConfiguration.maxFrameRate > 0) {
-                                strongSelf.nextAllowedVideoFrame = CMTimeAdd(time, CMTimeMake(1, strongSelf.videoConfiguration.maxFrameRate));
-                            }
-                            [strongSelf _didAppendToInput:strongSelf.videoInput atTime:time];
+                        } @catch (NSException *exception) {
+                            shouldReadNextBuffer = NO;
+                            _error = [NSError errorWithDomain:@"AWriter not opened!!!!!" code:-1 userInfo:nil];
+                            
+                        } @finally {
                             
                         }
-                        // } @catch (NSException *exception) {
-                        //  shouldReadNextBuffer = NO;
-                        //   _error = [NSError errorWithDomain:@"AWriter not opened!!!!!" code:-1 userInfo:nil];
-                        
-                        // } @finally {
-                        
-                        //}
                     }
                     
                     if (bufferHolder != nil) {
@@ -355,6 +356,9 @@ static CGContextRef SCCreateContextFromPixelBuffer(CVPixelBufferRef pixelBuffer)
                     if (videoBuffer != nil) {
                         CVPixelBufferUnlockBaseAddress(videoBuffer.inputPixelBuffer, 0);
                         CVPixelBufferUnlockBaseAddress(videoBuffer.outputPixelBuffer, 0);
+                        
+                        videoBuffer.inputPixelBuffer = nil;
+                        videoBuffer.outputPixelBuffer = nil;
                         
                     }
                     

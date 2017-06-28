@@ -30,6 +30,33 @@
     CVPixelBufferRelease(_outputPixelBuffer);
 }
 
+- (void)setInputPixelBuffer:(CVPixelBufferRef)inputPixelBuffer {
+    
+    if (_inputPixelBuffer != nil) {
+        CVPixelBufferRelease(_inputPixelBuffer);
+        _inputPixelBuffer = nil;
+    }
+    
+    _inputPixelBuffer = inputPixelBuffer;
+    
+    if (inputPixelBuffer != nil) {
+        CVPixelBufferRetain(inputPixelBuffer);
+    }
+    
+}
+-(void)setOutputPixelBuffer:(CVPixelBufferRef)outputPixelBuffer {
+    if (_outputPixelBuffer != nil) {
+        CVPixelBufferRelease(_outputPixelBuffer);
+        _outputPixelBuffer = nil;
+    }
+    
+    _outputPixelBuffer = outputPixelBuffer;
+    
+    if (outputPixelBuffer != nil) {
+        CVPixelBufferRetain(outputPixelBuffer);
+    }
+}
+
 + (SCIOPixelBuffers *)IOPixelBuffersWithInputPixelBuffer:(CVPixelBufferRef)inputPixelBuffer outputPixelBuffer:(CVPixelBufferRef)outputPixelBuffer time:(CMTime)time {
     return [[SCIOPixelBuffers alloc] initWithInputPixelBuffer:inputPixelBuffer outputPixelBuffer:outputPixelBuffer time:time];
 }

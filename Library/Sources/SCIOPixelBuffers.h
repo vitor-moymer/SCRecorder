@@ -11,11 +11,12 @@
 
 @interface SCIOPixelBuffers : NSObject
 
-@property (readonly, nonatomic) CMTime time;
+@property  (readonly, nonatomic) CMTime time;
 
-@property (readonly, nonatomic) CVPixelBufferRef inputPixelBuffer;
+@property  (assign, nonatomic) CVPixelBufferRef inputPixelBuffer;
 
-@property (readonly, nonatomic) CVPixelBufferRef outputPixelBuffer;
+@property  (assign, nonatomic) CVPixelBufferRef outputPixelBuffer;
+
 
 + (SCIOPixelBuffers *)IOPixelBuffersWithInputPixelBuffer:(CVPixelBufferRef)inputPixelBuffer outputPixelBuffer:(CVPixelBufferRef)outputPixelBuffer time:(CMTime)time;
 
