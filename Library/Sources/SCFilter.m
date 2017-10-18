@@ -295,6 +295,8 @@
         return image;
     }
     
+     CIImage *newImage = nil;
+    
     id<SCFilterDelegate> delegate = self.delegate;
     
     if ([delegate respondsToSelector:@selector(filter:willProcessImage:atTime:)]) {
@@ -302,7 +304,11 @@
     }
     
     for (SCFilter *filter in _subFilters) {
-        image = [filter imageByProcessingImage:image atTime:time];
+        newImage =  [filter imageByProcessingImage:image atTime:time];
+        if (newImage != nil ){
+            image = newImage;
+        }
+       
     }
     
     for (SCFilterAnimation *animation in _animations) {
@@ -314,15 +320,20 @@
 
     CIImage *overlayImage = _overlayImage;
     if (overlayImage != nil) {
-        image = [overlayImage imageByCompositingOverImage:image];
+        newImage =  [overlayImage imageByCompositingOverImage:image];
+        if (newImage != nil ){
+            image = newImage;
+        }
+    }
+
+    if (image == nil) {
+        return nil;
     }
 
     CIFilter *ciFilter = _CIFilter;
-
     if (ciFilter == nil) {
         return image;
     }
-
     [ciFilter setValue:image forKey:kCIInputImageKey];
     return [ciFilter valueForKey:kCIOutputImageKey];
 }
